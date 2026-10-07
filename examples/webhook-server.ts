@@ -1,8 +1,8 @@
 import http from "node:http";
 import { Config, Effect, Layer } from "effect";
 import {
-  githubToDiscordWorkflow,
-  GitHubPushPayload,
+  githubMultiEventWorkflow,
+  GitHubWebhookEvent,
   DiscordService,
   DiscordDeliveryError
 } from "./github-to-discord.js";
@@ -49,11 +49,19 @@ const server = http.createServer((req, res) => {
 
     req.on("end", async () => {
       try {
-        const payload = JSON.parse(body) as GitHubPushPayload;
+        const rawEventHeader = (req.headers["x-github-event"] as string) || "push";
+        const payload = JSON.parse(body);
 
-        // Jalankan Nagare Workflow Engine
-        const program = githubToDiscordWorkflow
-          .execute(payload)
+        const event: GitHubWebhookEvent = {
+          eventType: (rawEventHeader === "watch" ? "star" : rawEventHeader) as any,
+          payload
+        };
+
+        console.log(`📥 Menerima event GitHub: [${rawEventHeader}] dari @${payload.sender?.login || "unknown"}`);
+
+        // Eksekusi Nagare Workflow Engine
+        const program = githubMultiEventWorkflow
+          .execute(event)
           .pipe(Effect.provide(LiveDiscordLayer));
 
         const result = await Effect.runPromise(program);
@@ -74,5 +82,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log(`📡 GitHub Webhook listener running at http://localhost:${PORT}/webhook`);
-  console.log(`👉 Siap menerima webhook dari GitHub dan meneruskannya ke Discord.`);
+  console.log(`👉 Siap menerima webhook Push, Star/Watch, Issues, dan PR dari GitHub.`);
 });

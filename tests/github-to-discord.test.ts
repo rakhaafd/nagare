@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { Cause, Effect, Exit, Layer } from "effect";
 import {
+  githubMultiEventWorkflow,
   githubToDiscordWorkflow,
   GitHubPushPayload,
+  GitHubStarPayload,
   DiscordService,
   DiscordDeliveryError,
   MockDiscordServiceLive
 } from "../examples/github-to-discord.js";
 
 describe("GitHub Webhook to Discord Notification Workflow", () => {
-  const samplePayload: GitHubPushPayload = {
+  const samplePushPayload: GitHubPushPayload = {
     repository: {
       full_name: "rakha/effect-workflow-engine"
     },
@@ -25,7 +27,7 @@ describe("GitHub Webhook to Discord Notification Workflow", () => {
     ]
   };
 
-  it("successfully processes webhook payload and sends discord notification", async () => {
+  it("successfully processes push payload and sends discord notification", async () => {
     let capturedMessage: any = null;
 
     const testDiscordLayer = Layer.succeed(
@@ -39,7 +41,7 @@ describe("GitHub Webhook to Discord Notification Workflow", () => {
     );
 
     const program = githubToDiscordWorkflow
-      .execute(samplePayload)
+      .execute(samplePushPayload)
       .pipe(Effect.provide(testDiscordLayer));
 
     const result = await Effect.runPromise(program);
@@ -50,27 +52,41 @@ describe("GitHub Webhook to Discord Notification Workflow", () => {
     expect(capturedMessage.embeds[0].description).toContain("feat: add workflow engine support");
   });
 
-  it("handles invalid webhook payload with typed error", async () => {
-    const invalidPayload = {
-      repository: { full_name: "" },
-      sender: { login: "rakha" },
-      commits: []
-    } as GitHubPushPayload;
+  it("handles Star/Watch events and formats golden star embed", async () => {
+    let capturedMessage: any = null;
 
-    const program = githubToDiscordWorkflow
-      .execute(invalidPayload)
-      .pipe(Effect.provide(MockDiscordServiceLive));
+    const testDiscordLayer = Layer.succeed(
+      DiscordService,
+      DiscordService.of({
+        sendNotification: (msg) =>
+          Effect.sync(() => {
+            capturedMessage = msg;
+          })
+      })
+    );
 
-    const exit = await Effect.runPromiseExit(program);
-    expect(Exit.isFailure(exit)).toBe(true);
-
-    if (Exit.isFailure(exit)) {
-      const error = Cause.failureOption(exit.cause);
-      expect(error._tag).toBe("Some");
-      if (error._tag === "Some") {
-        expect(error.value._tag).toBe("InvalidWebhookPayloadError");
+    const starPayload: GitHubStarPayload = {
+      action: "started",
+      repository: {
+        full_name: "rakha/effect-workflow-engine",
+        stargazers_count: 42
+      },
+      sender: {
+        login: "octocat",
+        avatar_url: "https://github.com/octocat.png"
       }
-    }
+    };
+
+    const program = githubMultiEventWorkflow
+      .execute({ eventType: "star", payload: starPayload })
+      .pipe(Effect.provide(testDiscordLayer));
+
+    const result = await Effect.runPromise(program);
+
+    expect(result.success).toBe(true);
+    expect(capturedMessage.embeds[0].title).toBe("⭐ New Star on rakha/effect-workflow-engine!");
+    expect(capturedMessage.embeds[0].description).toContain("@octocat");
+    expect(capturedMessage.embeds[0].description).toContain("42");
   });
 
   it("retries when discord service temporarily fails", async () => {
@@ -92,7 +108,7 @@ describe("GitHub Webhook to Discord Notification Workflow", () => {
     );
 
     const program = githubToDiscordWorkflow
-      .execute(samplePayload)
+      .execute(samplePushPayload)
       .pipe(Effect.provide(flakyDiscordLayer));
 
     const result = await Effect.runPromise(program);

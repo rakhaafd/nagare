@@ -1,8 +1,8 @@
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer, Match } from "effect";
 import { Step, Workflow, RetryPolicy } from "../src/index.js";
 
 // ==========================================
-// 1. Domain Types (GitHub Webhook & Discord)
+// 1. Domain Types (GitHub Multi-Event & Discord)
 // ==========================================
 
 export interface GitHubPushPayload {
@@ -11,6 +11,7 @@ export interface GitHubPushPayload {
   };
   readonly sender: {
     readonly login: string;
+    readonly avatar_url?: string;
   };
   readonly commits: ReadonlyArray<{
     readonly id: string;
@@ -21,13 +22,78 @@ export interface GitHubPushPayload {
   }>;
 }
 
-export interface DiscordMessage {
-  readonly content: string;
-  readonly embeds?: ReadonlyArray<{
+export interface GitHubStarPayload {
+  readonly action: "created" | "deleted" | "started";
+  readonly repository: {
+    readonly full_name: string;
+    readonly stargazers_count?: number;
+  };
+  readonly sender: {
+    readonly login: string;
+    readonly avatar_url?: string;
+  };
+}
+
+export interface GitHubIssuePayload {
+  readonly action: "opened" | "closed" | "reopened";
+  readonly issue: {
+    readonly number: number;
     readonly title: string;
-    readonly description: string;
-    readonly color?: number;
-  }>;
+    readonly html_url: string;
+    readonly user: {
+      readonly login: string;
+    };
+  };
+  readonly repository: {
+    readonly full_name: string;
+  };
+  readonly sender: {
+    readonly login: string;
+  };
+}
+
+export interface GitHubPRPayload {
+  readonly action: "opened" | "closed" | "reopened";
+  readonly pull_request: {
+    readonly number: number;
+    readonly title: string;
+    readonly html_url: string;
+    readonly merged?: boolean;
+    readonly user: {
+      readonly login: string;
+    };
+  };
+  readonly repository: {
+    readonly full_name: string;
+  };
+  readonly sender: {
+    readonly login: string;
+  };
+}
+
+export type GitHubWebhookEvent =
+  | { readonly eventType: "push"; readonly payload: GitHubPushPayload }
+  | { readonly eventType: "star" | "watch"; readonly payload: GitHubStarPayload }
+  | { readonly eventType: "issues"; readonly payload: GitHubIssuePayload }
+  | { readonly eventType: "pull_request"; readonly payload: GitHubPRPayload };
+
+export interface DiscordEmbed {
+  readonly title?: string;
+  readonly description?: string;
+  readonly url?: string;
+  readonly color?: number;
+  readonly author?: {
+    readonly name: string;
+    readonly icon_url?: string;
+  };
+  readonly footer?: {
+    readonly text: string;
+  };
+}
+
+export interface DiscordMessage {
+  readonly content?: string;
+  readonly embeds?: ReadonlyArray<DiscordEmbed>;
 }
 
 // ==========================================
@@ -59,54 +125,94 @@ export const DiscordService = Context.GenericTag<DiscordService>("@app/DiscordSe
 // 4. Workflow Steps
 // ==========================================
 
-// Step 1: Validasi payload GitHub Webhook
-export const validatePayloadStep = Step.make({
-  name: "validate-github-payload",
-  execute: (payload: GitHubPushPayload) =>
+// Step 1: Format event GitHub menjadi pesan Discord Embed
+export const formatGitHubToDiscordStep = Step.make({
+  name: "format-github-to-discord",
+  execute: (event: GitHubWebhookEvent) =>
     Effect.gen(function* () {
-      if (!payload.repository?.full_name) {
-        return yield* Effect.fail(
-          new InvalidWebhookPayloadError({ message: "Missing repository name" })
-        );
+      switch (event.eventType) {
+        case "star":
+        case "watch": {
+          const { repository, sender } = event.payload;
+          const starsText =
+            repository.stargazers_count !== undefined
+              ? ` (Total ⭐: ${repository.stargazers_count})`
+              : "";
+
+          return {
+            embeds: [
+              {
+                title: `⭐ New Star on ${repository.full_name}!`,
+                description: `**@${sender.login}** baru saja memberikan star ke repositori **${repository.full_name}**${starsText}! 🎉`,
+                color: 0xffac33,
+                author: {
+                  name: sender.login,
+                  icon_url: sender.avatar_url
+                }
+              }
+            ]
+          } satisfies DiscordMessage;
+        }
+
+        case "push": {
+          const { repository, sender, commits } = event.payload;
+          const commitList = (commits || [])
+            .map((c) => `• [\`${c.id.substring(0, 7)}\`] ${c.message} (${c.author.name})`)
+            .join("\n");
+
+          return {
+            content: `🚀 **New Push to \`${repository.full_name}\`** by **@${sender.login}**`,
+            embeds: [
+              {
+                title: `${commits?.length ?? 0} Commit(s) Pushed`,
+                description: commitList || "No commit details available.",
+                color: 0x5865f2
+              }
+            ]
+          } satisfies DiscordMessage;
+        }
+
+        case "issues": {
+          const { action, issue, repository, sender } = event.payload;
+          return {
+            embeds: [
+              {
+                title: `🐛 Issue #${issue.number} ${action}: ${issue.title}`,
+                url: issue.html_url,
+                description: `Aksi oleh **@${sender.login}** di repositori **${repository.full_name}**`,
+                color: action === "opened" ? 0x2ecc71 : 0xe74c3c
+              }
+            ]
+          } satisfies DiscordMessage;
+        }
+
+        case "pull_request": {
+          const { action, pull_request, repository, sender } = event.payload;
+          const statusText = pull_request.merged ? "merged" : action;
+          return {
+            embeds: [
+              {
+                title: `🔀 Pull Request #${pull_request.number} ${statusText}: ${pull_request.title}`,
+                url: pull_request.html_url,
+                description: `Aksi oleh **@${sender.login}** di repositori **${repository.full_name}**`,
+                color: pull_request.merged ? 0x9b59b6 : 0x3498db
+              }
+            ]
+          } satisfies DiscordMessage;
+        }
+
+        default:
+          return {
+            content: `📢 GitHub Event received from \`${(event as any).payload?.repository?.full_name || "GitHub"}\``
+          } satisfies DiscordMessage;
       }
-      if (!payload.commits || payload.commits.length === 0) {
-        return yield* Effect.fail(
-          new InvalidWebhookPayloadError({ message: "No commits in push event" })
-        );
-      }
-      return payload;
     })
 });
 
-// Step 2: Format data menjadi Discord Embed message
-export const formatDiscordMessageStep = Step.make({
-  name: "format-discord-message",
-  execute: (payload: GitHubPushPayload) =>
-    Effect.gen(function* () {
-      const commitCount = payload.commits.length;
-      const commitList = payload.commits
-        .map((c) => `• [\`${c.id.substring(0, 7)}\`] ${c.message} (${c.author.name})`)
-        .join("\n");
-
-      const message: DiscordMessage = {
-        content: `🚀 **New Push to ${payload.repository.full_name}** by \`${payload.sender.login}\``,
-        embeds: [
-          {
-            title: `${commitCount} new commit(s)`,
-            description: commitList,
-            color: 0x2b2d31
-          }
-        ]
-      };
-
-      return message;
-    })
-});
-
-// Step 3: Kirim notifikasi ke Discord dengan Retry & Timeout
+// Step 2: Kirim ke Discord dengan Retry & Timeout
 export const sendDiscordNotificationStep = Step.make({
   name: "send-discord-notification",
-  timeout: "3 seconds",
+  timeout: "5 seconds",
   retry: RetryPolicy.exponential({
     maxAttempts: 3,
     initialDelay: "100 millis",
@@ -124,22 +230,27 @@ export const sendDiscordNotificationStep = Step.make({
 // 5. Compose Workflow
 // ==========================================
 
-export const githubToDiscordWorkflow = Workflow.define({
-  name: "github-webhook-to-discord",
-  execute: (webhookPayload: GitHubPushPayload) =>
+export const githubMultiEventWorkflow = Workflow.define({
+  name: "github-multi-event-to-discord",
+  execute: (event: GitHubWebhookEvent) =>
     Effect.gen(function* () {
-      const validated = yield* validatePayloadStep.execute(webhookPayload);
-      const discordMsg = yield* formatDiscordMessageStep.execute(validated);
+      const discordMsg = yield* formatGitHubToDiscordStep.execute(event);
       const result = yield* sendDiscordNotificationStep.execute(discordMsg);
       return result;
     })
 });
 
+// Alias untuk backwards-compatibility
+export const githubToDiscordWorkflow = Workflow.define({
+  name: "github-webhook-to-discord",
+  execute: (payload: GitHubPushPayload) =>
+    githubMultiEventWorkflow.execute({ eventType: "push", payload })
+});
+
 // ==========================================
-// 6. Layer Implementations (Mock & Live)
+// 6. Layer Implementations
 // ==========================================
 
-// Mock Layer untuk testing/local
 export const MockDiscordServiceLive = Layer.succeed(
   DiscordService,
   DiscordService.of({
@@ -150,7 +261,6 @@ export const MockDiscordServiceLive = Layer.succeed(
   })
 );
 
-// Live HTTP Layer menggunakan webhook URL
 export const makeLiveDiscordService = (webhookUrl: string) =>
   Layer.succeed(
     DiscordService,
@@ -164,7 +274,8 @@ export const makeLiveDiscordService = (webhookUrl: string) =>
               body: JSON.stringify(msg)
             });
             if (!res.ok) {
-              throw new Error(`Discord API error: ${res.statusText}`);
+              const text = await res.text();
+              throw new Error(`Discord API error (${res.status}): ${text}`);
             }
           },
           catch: (err) =>
