@@ -50,7 +50,17 @@ const server = http.createServer((req, res) => {
     req.on("end", async () => {
       try {
         const rawEventHeader = (req.headers["x-github-event"] as string) || "push";
-        const payload = JSON.parse(body);
+        const contentType = (req.headers["content-type"] as string) || "";
+
+        let payload: any;
+        // Tangani jika GitHub mengirim format urlencoded (payload=...) maupun direct application/json
+        if (contentType.includes("application/x-www-form-urlencoded") || body.startsWith("payload=")) {
+          const params = new URLSearchParams(body);
+          const payloadStr = params.get("payload");
+          payload = payloadStr ? JSON.parse(payloadStr) : JSON.parse(body);
+        } else {
+          payload = JSON.parse(body);
+        }
 
         const event: GitHubWebhookEvent = {
           eventType: (rawEventHeader === "watch" ? "star" : rawEventHeader) as any,
@@ -65,6 +75,7 @@ const server = http.createServer((req, res) => {
           .pipe(Effect.provide(LiveDiscordLayer));
 
         const result = await Effect.runPromise(program);
+        console.log(`✅ Berhasil memproses event [${rawEventHeader}] dan mengirim ke Discord.`);
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ status: "success", result }));
