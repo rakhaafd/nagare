@@ -8,13 +8,16 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "example:dispatch": "tsx --env-file=.env examples/run-live-notification.ts",
+    "example:server": "tsx --env-file=.env examples/webhook-server.ts"
   },
   "dependencies": {
     "effect": "^3.13.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"
   }
