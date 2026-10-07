@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "example:dispatch": "tsx --env-file=.env examples/run-live-notification.ts",
-    "example:server": "tsx --env-file=.env examples/webhook-server.ts"
+    "example:server": "tsx --env-file=.env examples/webhook-server.ts",
+    "example:server:watch": "tsx watch --env-file=.env examples/webhook-server.ts"
   },
   "dependencies": {
     "effect": "^3.13.0"
