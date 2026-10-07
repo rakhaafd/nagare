@@ -1,0 +1,21 @@
+{
+  "name": "nagare",
+  "version": "0.1.0",
+  "description": "A type-safe, composable workflow engine built with TypeScript and Effect.ts",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "effect": "^3.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}
